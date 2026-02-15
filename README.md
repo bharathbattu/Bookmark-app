@@ -58,7 +58,8 @@ app/
         ├── BookmarkList.tsx   # Client Component — state + realtime subscription
         ├── BookmarkForm.tsx   # Client Component — add bookmark form
         ├── BookmarkItem.tsx   # Client Component — single row + delete
-        └── LogoutButton.tsx   # Client Component — sign out
+        ├── LogoutButton.tsx   # Client Component — sign out
+        └── SessionGuard.tsx   # Client Component — cross-tab session integrity
 
 utils/supabase/
 ├── client.ts                  # Browser client (createBrowserClient)
@@ -80,6 +81,7 @@ supabase/schema.sql            # Full database schema (table, RLS, realtime)
 | `BookmarkForm.tsx` | Client | Form input + submit handler |
 | `BookmarkItem.tsx` | Client | Delete button handler |
 | `LogoutButton.tsx` | Client | Sign-out action |
+| `SessionGuard.tsx` | Client | Detects cross-tab session mismatches |
 | `GoogleSignInButton.tsx` | Client | OAuth trigger |
 
 ---
@@ -101,15 +103,18 @@ User clicks "Sign in with Google"
 
 - Cookie-based sessions via `@supabase/ssr`.
 - Three isolated Supabase client utilities (browser, server, middleware) each handle cookies in their respective context.
-- Proxy (Next.js 16 middleware) runs on **every request** (excluding static assets), calls `supabase.auth.getUser()` (server-validated, not JWT-only), keeps session cookies fresh, and redirects to `/` if an unauthenticated user tries to access `/dashboard`.
+- Proxy (Next.js 16 middleware) runs on **every request** (excluding static assets and `/auth/callback`), calls `supabase.auth.getUser()` (server-validated, not JWT-only), keeps session cookies fresh, and redirects to `/` if an unauthenticated user tries to access `/dashboard`.
+- **`/auth/callback` is explicitly skipped** by the proxy to prevent `updateSession()` from corrupting the PKCE `code_verifier` cookie before `exchangeCodeForSession()` reads it (see Challenge #11).
 - Dashboard page performs a redundant server-side `getUser()` check before rendering (defense in depth).
+- **`SessionGuard`** (invisible client component) runs on the dashboard and detects cross-tab session mismatches via `visibilitychange`, `focus`, and `onAuthStateChange` events. On mismatch it triggers a data refresh; on session loss it redirects to `/` (see Challenge #10).
 
 ### OAuth Callback Safety
 
 - Missing `code` parameter → redirects to `/?error=missing_code`.
-- Failed session exchange → redirects to `/?error=auth_callback_failed`.
+- Failed session exchange → checks if a valid session already exists (handles browser retries where the code was already used). If no session, redirects to `/?error=auth_callback_failed`.
 - Unexpected exception → redirects to `/?error=auth_callback_unexpected`.
-- Origin resolution has fallback for edge environments.
+- Origin resolution has fallback for edge environments (checks `VERCEL_PROJECT_PRODUCTION_URL`).
+- Exchange errors are logged with message/code/status for diagnostics.
 
 ---
 
@@ -449,6 +454,33 @@ Dashboard route protection (redirect to `/` if unauthenticated) is handled insid
 
 **Solution**: Pinned ESLint to the latest compatible v9 release (`^9.39.2`) until the Next.js ESLint ecosystem catches up.
 
+### 10. Cross-Tab Session Bleed (Cookie Sharing)
+
+**Problem**: In a single browser, cookies are shared across all tabs. If a user signs in as Account A in one tab and Account B in another (or signs out in one tab), the session cookies are overwritten globally. Any stale tab continues to show the old user's data and Realtime subscription — meaning User A could momentarily see User B's bookmark changes arrive via the still-connected WebSocket, or continue operating on a session that no longer exists.
+
+**Solution**: Created a `SessionGuard` client component that runs invisibly on the dashboard. It:
+1. Accepts the `serverUserId` (from the SSR auth check) as a prop.
+2. On `visibilitychange` and `focus` events (i.e., when the user switches back to a tab), calls `supabase.auth.getUser()` and compares the result to `serverUserId`.
+3. Listens to `onAuthStateChange` for `SIGNED_OUT` / `TOKEN_REFRESHED` / `SIGNED_IN` events.
+4. If the user ID has changed → calls `router.refresh()` to re-run the server component (which re-validates auth and re-fetches data).
+5. If the session is gone → redirects to `/`.
+
+Additionally, `BookmarkList.tsx` was hardened: its `onAuthStateChange` handler verifies `session.user.id === userId` before setting up the Realtime channel, and tears down the channel if the user ID no longer matches.
+
+### 11. Intermittent "Authentication Failed During Sign-In" (PKCE Cookie Corruption)
+
+**Problem**: Users intermittently saw "Authentication failed during sign-in" after the Google consent screen, despite valid credentials. The error was non-deterministic — the same user could retry and succeed.
+
+**Root cause** (three compounding issues):
+1. **Proxy middleware running on `/auth/callback`**: The proxy called `updateSession()` → `getUser()` on every route, including `/auth/callback`. This could read/modify session cookies **before** the callback route handler ran `exchangeCodeForSession()`, corrupting the PKCE `code_verifier` cookie that the exchange needs.
+2. **No fallback for already-used auth codes**: If the browser retried the callback request (e.g., due to a network hiccup) or the code was already exchanged by the proxy's `getUser()` call, `exchangeCodeForSession()` would fail — even though a valid session already existed in cookies.
+3. **Unnecessary `signOut({ scope: "local" })` before OAuth**: The sign-in button called `signOut()` before `signInWithOAuth()` to "clean up" stale sessions. This deleted local cookies including the PKCE `code_verifier`, so if the sign-out cleared state that the in-flight OAuth redirect depended on, the exchange would fail.
+
+**Solution** (three targeted fixes):
+1. **`proxy.ts`**: Added early return for `/auth/callback` path before `updateSession()` runs — the callback route handles its own session establishment.
+2. **`app/auth/callback/route.ts`**: When `exchangeCodeForSession()` fails, now falls back to `getUser()` to check if a valid session already exists. If so, proceeds normally to `/dashboard`. Added `console.error` logging for failed exchanges.
+3. **`GoogleSignInButton.tsx`**: Removed the `signOut({ scope: "local" })` call. The `prompt: "select_account"` query param already forces Google to show the account picker, making the sign-out redundant.
+
 ---
 
 ## Security Decisions
@@ -461,6 +493,9 @@ Dashboard route protection (redirect to `/` if unauthenticated) is handled insid
 | No UPDATE policy | Intentionally omitted. Without a policy, PostgreSQL RLS blocks all update attempts. |
 | Middleware route protection | `/dashboard` is guarded server-side before rendering. No flash of unauthenticated content. |
 | Double auth check | Middleware checks auth, and the dashboard page checks again. Defense in depth. |
+| Proxy skips `/auth/callback` | Prevents PKCE cookie corruption during OAuth code exchange. |
+| SessionGuard cross-tab monitor | Detects session mismatches from cookie sharing across tabs; refreshes or redirects. |
+| Realtime user-id verification | `BookmarkList` verifies `session.user.id === userId` before channel setup; tears down on mismatch. |
 
 ---
 
