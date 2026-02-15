@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import BookmarkList from "@/app/dashboard/_components/BookmarkList";
 import LogoutButton from "@/app/dashboard/_components/LogoutButton";
+import SessionGuard from "@/app/dashboard/_components/SessionGuard";
 import type { Bookmark } from "@/types/bookmark";
 
 export default async function DashboardPage() {
@@ -23,6 +24,9 @@ export default async function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-zinc-100 p-6">
+      {/* Detects cross-tab session changes and refreshes the page automatically */}
+      <SessionGuard serverUserId={user.id} />
+
       <main className="mx-auto w-full max-w-3xl rounded-xl bg-white p-8 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

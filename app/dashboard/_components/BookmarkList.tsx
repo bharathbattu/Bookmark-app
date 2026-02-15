@@ -117,13 +117,32 @@ export default function BookmarkList({ initialBookmarks, userId }: BookmarkListP
     const {
       data: { subscription: authListener },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) {
-        setupChannel();
+      if (!session) {
+        // User signed out — tear down the channel
+        if (channel) {
+          supabase.removeChannel(channel);
+          channel = null;
+        }
+        return;
       }
+
+      // If the session belongs to a different user (e.g. another tab signed
+      // in as someone else and the cookie changed), tear down the stale
+      // channel. The SessionGuard will trigger a full page refresh shortly,
+      // but this prevents any window where the wrong user's events leak.
+      if (session.user.id !== userId) {
+        if (channel) {
+          supabase.removeChannel(channel);
+          channel = null;
+        }
+        return;
+      }
+
+      setupChannel();
     });
 
     void supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
+      if (data.session && data.session.user.id === userId) {
         setupChannel();
       }
     });
