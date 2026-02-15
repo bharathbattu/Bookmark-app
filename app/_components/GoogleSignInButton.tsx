@@ -39,13 +39,15 @@ export default function GoogleSignInButton() {
       const supabase = createBrowserSupabaseClient();
       const redirectTo = `${getAppOrigin()}/auth/callback`;
 
-      await supabase.auth.signOut({ scope: "local" });
-
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo,
           queryParams: {
+            // Forces Google to show the account picker even if the user has a
+            // single account or is already signed in. This replaces the
+            // previous signOut({ scope: "local" }) call, which was removed
+            // because it could interfere with PKCE cookie state.
             prompt: "select_account",
           },
         },

@@ -2,6 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/utils/supabase/middleware";
 
 export async function proxy(request: NextRequest) {
+  // Skip session refresh for the OAuth callback route. The callback
+  // establishes a NEW session via PKCE code exchange, and running
+  // updateSession() here can corrupt the code_verifier cookie before
+  // exchangeCodeForSession() reads it — causing intermittent auth failures.
+  if (request.nextUrl.pathname.startsWith("/auth/callback")) {
+    return NextResponse.next();
+  }
+
   try {
     // Refresh session cookies on every matched request so the browser-side
     // Supabase client always has a valid JWT available in cookies.

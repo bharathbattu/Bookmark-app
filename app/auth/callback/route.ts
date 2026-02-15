@@ -81,11 +81,32 @@ export async function GET(request: Request) {
     const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
     if (exchangeError) {
+      // The code exchange can fail if the code was already used (e.g. browser
+      // retried the request) or the PKCE verifier was lost. Before showing an
+      // error, check whether a valid session already exists — if it does, the
+      // previous exchange succeeded and we can proceed normally.
+      console.error("exchangeCodeForSession failed", {
+        message: exchangeError.message,
+        code: exchangeError.code,
+        status: exchangeError.status,
+      });
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (user) {
+        return NextResponse.redirect(
+          new URL("/dashboard", getRequestOrigin(request)),
+        );
+      }
+
       return redirectWithError(request, "auth_callback_failed");
     }
 
     return NextResponse.redirect(new URL("/dashboard", getRequestOrigin(request)));
-  } catch {
+  } catch (error) {
+    console.error("Auth callback unexpected error", error);
     return redirectWithError(request, "auth_callback_unexpected");
   }
 }
