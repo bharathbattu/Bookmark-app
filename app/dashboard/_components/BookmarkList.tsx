@@ -100,7 +100,7 @@ export default function BookmarkList({ initialBookmarks, userId }: BookmarkListP
             }
           } else if (status === "SUBSCRIBED") {
             reconnectAttempts = 0;
-          }
+           }
         });
     }
 
