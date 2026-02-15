@@ -51,3 +51,5 @@ AUDIT_ARTIFACTS/
 *.temp
 Thumbs.db
 
+
+.vercel

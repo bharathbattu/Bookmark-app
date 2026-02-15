@@ -33,6 +33,10 @@ export default function BookmarkList({ initialBookmarks, userId }: BookmarkListP
     const supabase = createBrowserSupabaseClient();
     let channel: RealtimeChannel | null = null;
     let isCancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 10;
+    const BASE_DELAY_MS = 1_000;
 
     /**
      * Create the Realtime channel and subscribe to INSERT / DELETE events.
@@ -76,8 +80,26 @@ export default function BookmarkList({ initialBookmarks, userId }: BookmarkListP
           },
         )
         .subscribe((status) => {
-          if (status === "CHANNEL_ERROR") {
-            console.error("Bookmark realtime channel error");
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            console.error("Bookmark realtime channel disconnected", status);
+
+            if (channel) {
+              supabase.removeChannel(channel);
+              channel = null;
+            }
+
+            if (!isCancelled && !reconnectTimer && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+              const delay = Math.min(BASE_DELAY_MS * 2 ** reconnectAttempts, 30_000);
+              reconnectAttempts++;
+              reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                setupChannel();
+              }, delay);
+            } else if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+              console.error("Bookmark realtime: max reconnect attempts reached, giving up.");
+            }
+          } else if (status === "SUBSCRIBED") {
+            reconnectAttempts = 0;
           }
         });
     }
@@ -100,8 +122,17 @@ export default function BookmarkList({ initialBookmarks, userId }: BookmarkListP
       }
     });
 
+    void supabase.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        setupChannel();
+      }
+    });
+
     return () => {
       isCancelled = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
       authListener.unsubscribe();
       if (channel) {
         supabase.removeChannel(channel);

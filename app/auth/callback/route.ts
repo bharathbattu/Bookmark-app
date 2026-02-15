@@ -1,19 +1,45 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
+function getConfiguredOrigin() {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (appUrl) {
+    return appUrl.replace(/\/$/, "");
+  }
+
+  const vercelUrl = process.env.VERCEL_URL?.trim();
+  if (vercelUrl) {
+    return `https://${vercelUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+  }
+
+  return null;
+}
+
 function getRequestOrigin(request: Request) {
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  const protocol = request.headers.get("x-forwarded-proto") ?? "https";
+
+  if (host) {
+    return `${protocol}://${host}`;
+  }
+
+  const configuredOrigin = getConfiguredOrigin();
+  if (configuredOrigin) {
+    return configuredOrigin;
+  }
+
   try {
-    return new URL(request.url).origin;
-  } catch {
-    const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
-    const protocol = request.headers.get("x-forwarded-proto") ?? "https";
+    const requestOrigin = new URL(request.url).origin;
+    const requestHost = new URL(request.url).hostname;
 
-    if (host) {
-      return `${protocol}://${host}`;
+    if (requestHost !== "localhost" && requestHost !== "127.0.0.1") {
+      return requestOrigin;
     }
-
+  } catch {
     return "http://localhost:3000";
   }
+
+  return "http://localhost:3000";
 }
 
 function redirectWithError(request: Request, errorCode: string) {

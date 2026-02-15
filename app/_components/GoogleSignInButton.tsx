@@ -6,6 +6,16 @@ import { createBrowserSupabaseClient } from "@/utils/supabase/client";
 export default function GoogleSignInButton() {
   const [isLoading, setIsLoading] = useState(false);
 
+  const getAppOrigin = () => {
+    const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+
+    if (configuredAppUrl) {
+      return configuredAppUrl.replace(/\/$/, "");
+    }
+
+    return window.location.origin;
+  };
+
   const handleGoogleSignIn = async () => {
     if (isLoading) {
       return;
@@ -14,7 +24,7 @@ export default function GoogleSignInButton() {
     try {
       setIsLoading(true);
       const supabase = createBrowserSupabaseClient();
-      const redirectTo = `${window.location.origin}/auth/callback`;
+      const redirectTo = `${getAppOrigin()}/auth/callback`;
 
       await supabase.auth.signOut({ scope: "local" });
 
