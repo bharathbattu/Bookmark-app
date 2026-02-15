@@ -481,6 +481,20 @@ Additionally, `BookmarkList.tsx` was hardened: its `onAuthStateChange` handler v
 2. **`app/auth/callback/route.ts`**: When `exchangeCodeForSession()` fails, now falls back to `getUser()` to check if a valid session already exists. If so, proceeds normally to `/dashboard`. Added `console.error` logging for failed exchanges.
 3. **`GoogleSignInButton.tsx`**: Removed the `signOut({ scope: "local" })` call. The `prompt: "select_account"` query param already forces Google to show the account picker, making the sign-out redundant.
 
+### 12. Persistent "Authentication Failed" — `cookies()` Abstraction Unreliable in Next.js 16 Route Handlers
+
+**Problem**: Even after fixing Challenge #11, some users consistently failed to sign in. Supabase auth logs showed that for failing users, **no `/token` POST request was ever made** to Supabase — meaning `exchangeCodeForSession()` failed *before* making the network call because it couldn't find the PKCE `code_verifier` cookie.
+
+**Root cause**: The shared `createClient()` utility (`utils/supabase/server.ts`) uses the `cookies()` API from `next/headers` to read and write cookies. In Next.js 16 Route Handlers, this abstraction has two critical failure modes:
+1. **`cookies()` can fail to expose the PKCE `code_verifier` cookie**: The Supabase auth library stores the `code_verifier` in a browser cookie during `signInWithOAuth()`. When the OAuth redirect arrives at `/auth/callback`, the browser sends this cookie in the raw `Cookie` header — but `cookies()` may not surface it in the Route Handler context, causing `exchangeCodeForSession()` to abort before contacting Supabase.
+2. **`cookieStore.set()` cookies may not survive `NextResponse.redirect()`**: After a successful code exchange, session tokens written via `cookieStore.set()` are not guaranteed to be included in the outgoing `Set-Cookie` headers of a `NextResponse.redirect()` response. This means the session tokens can be lost during the redirect to `/dashboard`, leaving the user unauthenticated even though the exchange succeeded.
+
+**Solution**: Rewrote `app/auth/callback/route.ts` to create its own Supabase client with explicit HTTP-level cookie handling using `parseCookieHeader` and `serializeCookieHeader` from `@supabase/ssr`:
+- **Read**: Cookies are parsed from the raw `request.headers.get("cookie")` header — bypassing `cookies()` entirely.
+- **Write**: `Set-Cookie` headers are collected during the exchange and appended directly to the `NextResponse.redirect()` response object.
+
+This matches the Supabase-recommended pattern for non-Next.js frameworks (Express, Remix) and operates at the HTTP protocol level, making it immune to Next.js cookie abstraction quirks. Diagnostic logging of cookie names (not values) was added to enable production debugging without leaking secrets.
+
 ---
 
 ## Security Decisions
@@ -496,6 +510,7 @@ Additionally, `BookmarkList.tsx` was hardened: its `onAuthStateChange` handler v
 | Proxy skips `/auth/callback` | Prevents PKCE cookie corruption during OAuth code exchange. |
 | SessionGuard cross-tab monitor | Detects session mismatches from cookie sharing across tabs; refreshes or redirects. |
 | Realtime user-id verification | `BookmarkList` verifies `session.user.id === userId` before channel setup; tears down on mismatch. |
+| Raw HTTP cookies in auth callback | Bypasses `cookies()` abstraction; reads/writes cookies at protocol level to prevent PKCE and session token loss. |
 
 ---
 
