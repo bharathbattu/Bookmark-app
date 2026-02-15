@@ -1,10 +1,23 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 
+/**
+ * Resolve the canonical app origin for redirects.
+ *
+ * Priority order:
+ *   1. Explicit NEXT_PUBLIC_APP_URL (set by the developer)
+ *   2. VERCEL_PROJECT_PRODUCTION_URL (auto-set by Vercel — stable across deploys)
+ *   3. VERCEL_URL (auto-set by Vercel — per-deployment, changes on each deploy)
+ */
 function getConfiguredOrigin() {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (appUrl) {
     return appUrl.replace(/\/$/, "");
+  }
+
+  const vercelProductionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (vercelProductionUrl) {
+    return `https://${vercelProductionUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
   }
 
   const vercelUrl = process.env.VERCEL_URL?.trim();
@@ -16,6 +29,7 @@ function getConfiguredOrigin() {
 }
 
 function getRequestOrigin(request: Request) {
+  // On Vercel, x-forwarded-host is set by the edge proxy and is always correct.
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   const protocol = request.headers.get("x-forwarded-proto") ?? "https";
 

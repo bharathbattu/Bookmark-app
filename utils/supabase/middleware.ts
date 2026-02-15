@@ -14,7 +14,14 @@ export async function updateSession(request: NextRequest) {
   )?.trim();
 
   if (!supabaseUrl || !supabasePublishableKey) {
-    throw new Error("Missing Supabase environment variables.");
+    // Return early instead of throwing — lets the request continue so the
+    // route handler can display a proper error or the page can still render.
+    console.error(
+      "updateSession: Missing Supabase environment variables. " +
+        "Set NEXT_PUBLIC_SUPABASE_URL and one of NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY / " +
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY."
+    );
+    return { response, user: null };
   }
 
   const supabase = createServerClient(supabaseUrl, supabasePublishableKey, {

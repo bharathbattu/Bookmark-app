@@ -7,12 +7,25 @@ export default function GoogleSignInButton() {
   const [isLoading, setIsLoading] = useState(false);
 
   const getAppOrigin = () => {
+    // 1. Explicit override (developer-configured)
     const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
-
     if (configuredAppUrl) {
       return configuredAppUrl.replace(/\/$/, "");
     }
 
+    // 2. Vercel production URL (auto-set by Vercel, stable across deploys)
+    const vercelProductionUrl = process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL?.trim();
+    if (vercelProductionUrl) {
+      return `https://${vercelProductionUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+    }
+
+    // 3. Vercel deployment URL (auto-set, per-deployment)
+    const vercelUrl = process.env.NEXT_PUBLIC_VERCEL_URL?.trim();
+    if (vercelUrl) {
+      return `https://${vercelUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+    }
+
+    // 4. Fallback to the browser's current origin (works for local dev)
     return window.location.origin;
   };
 
